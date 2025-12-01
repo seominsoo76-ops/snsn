@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>우송대 경영학과 커뮤니티</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, getDocs, query, orderBy, Timestamp, doc, updateDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // Firebase 설정 (실제 프로젝트 설정으로 교체 필요)
+        const firebaseConfig = {
+	apiKey: "AIzaSyAs-c0kqgdZt604hx6tN2OQMnjqLpzKspY",
+ 	authDomain: "snsn-743cf.firebaseapp.com",
+ 	projectId: "snsn-743cf",
+ 	storageBucket: "snsn-743cf.firebasestorage.app",
+ 	messagingSenderId: "620814140186",
+	appId: "1:620814140186:web:d26b0365a520da5bf9a2a3"
+        };
+
+        // Firebase 초기화
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // 전역 상태
+        let currentUser = null;
+        let currentBoard = 'qa';
+        let posts = [];
+
+        // DOM 요소
+        const loginScreen = document.getElementById('loginScreen');
+        const registerScreen = document.getElementById('registerScreen');
+        const mainScreen = document.getElementById('mainScreen');
+        const postDetailScreen = document.getElementById('postDetailScreen');
+
+        // 로그인
+        window.loginUser = async () => {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                document.getElementById('loginError').textContent = '';
+            } catch (error) {
+                document.getElementById('loginError').textContent = '로그인 실패: ' + error.message;
+            }
+        };
+
+        // 회원가입
+        window.registerUser = async () => {
+            const email = document.getElementById('regEmail').value;
+            const password = document.getElementById('regPassword').value;
+            const name = document.getElementById('regName').value;
+            const studentId = document.getElementById('regStudentId').value;
+            
+            if (password.length < 6) {
+                document.getElementById('registerError').textContent = '비밀번호는 최소 6자 이상이어야 합니다.';
+                return;
+            }
+
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                // Firestore에 사용자 정보 저장
+                await addDoc(collection(db, 'users'), {
+                    uid: userCredential.user.uid,
+                    email: email,
+                    name: name,
+                    studentId: studentId,
+                    isInternational: document.getElementById('regIsInternational').checked,
+                    createdAt: Timestamp.now()
+                });
+                document.getElementById('registerError').textContent = '';
+            } catch (error) {
+                document.getElementById('registerError').textContent = '회원가입 실패: ' + error.message;
+            }
+        };
+
+        // 로그아웃
+        window.logoutUser = async () => {
+            await signOut(auth);
+        };
+
+        // 화면 전환
+        window.showRegisterScreen = () => {
+            loginScreen.classList.add('hidden');
+            registerScreen.classList.remove('hidden');
+        };
+
+        window.showLoginScreen = () => {
+            registerScreen.classList.add('hidden');
+            loginScreen.classList.remove('hidden');
+        };
+
+        // 게시판 전환
+        window.switchBoard = (boardType) => {
+            currentBoard = boardType;
+            document.querySelectorAll('.board-tab').forEach(tab => {
+                tab.classList.remove('bg-blue-900', 'text-white');
+                tab.classList.add('text-gray-600');
+            });
+            event.target.classList.add('bg-blue-900', 'text-white');
+            event.target.classList.remove('text-gray-600');
+            loadPosts();
+        };
+
+        // 게시글 작성
+        window.createPost = async () => {
+            const title = document.getElementById('postTitle').value;
+            const content = document.getElementById('postContent').value;
+            
+            if (!title || !content) {
+                alert('제목과 내용을 입력해주세요.');
+                return;
+            }
+
+            try {
+                await addDoc(collection(db, 'posts'), {
+                    authorId: currentUser.uid,
+                    authorName: currentUser.displayName || currentUser.email.split('@')[0],
+                    boardType: currentBoard,
+                    title: title,
+                    content: content,
+                    originalLanguage: 'ko',
+                    isResolved: false,
+                    viewCount: 0,
+                    commentCount: 0,
+                    createdAt: Timestamp.now()
+                });
+                
+                document.getElementById('postTitle').value = '';
+                document.getElementById('postContent').value = '';
+                document.getElementById('newPostModal').classList.add('hidden');
+                loadPosts();
+            } catch (error) {
+                alert('게시글 작성 실패: ' + error.message);
+            }
+        };
+
+        // 게시글 목록 로드
+        async function loadPosts() {
+            const postsContainer = document.getElementById('postsContainer');
+            postsContainer.innerHTML = '<div class="text-center py-8 text-gray-500">로딩 중...</div>';
+
+            try {
+                const q = query(
+                    collection(db, 'posts'),
+                    orderBy('createdAt', 'desc')
+                );
+                const querySnapshot = await getDocs(q);
+                posts = [];
+                
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (data.boardType === currentBoard) {
+                        posts.push({ id: doc.id, ...data });
+                    }
+                });
+
+                if (posts.length === 0) {
+                    postsContainer.innerHTML = '<div class="text-center py-8 text-gray-500">게시글이 없습니다.</div>';
+                    return;
+                }
+
+                postsContainer.innerHTML = posts.map(post => `
+                    <div onclick="viewPost('${post.id}')" class="bg-white rounded-lg shadow hover:shadow-md transition p-4 cursor-pointer">
+                        <div class="flex items-center gap-2 mb-2">
+                            <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-sm font-semibold">
+                                ${post.authorName[0].toUpperCase()}
+                            </div>
+                            <span class="text-sm font-medium text-gray-700">${post.authorName}</span>
+                            ${post.isResolved ? '<span class="ml-auto text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">해결됨</span>' : ''}
+                        </div>
+                        <h2 class="text-base font-bold text-gray-900 mb-1">${post.title}</h2>
+                        <p class="text-sm text-gray-600 line-clamp-2">${post.content}</p>
+                        <div class="flex items-center gap-4 mt-3 text-xs text-gray-500">
+                            <span>👁 ${post.viewCount}</span>
+                            <span>💬 ${post.commentCount}</span>
+                            <span>${new Date(post.createdAt.seconds * 1000).toLocaleDateString('ko-KR')}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                postsContainer.innerHTML = `<div class="text-center py-8 text-red-500">로드 실패: ${error.message}</div>`;
+            }
+        }
+
+        // 게시글 상세 보기
+        window.viewPost = async (postId) => {
+            const post = posts.find(p => p.id === postId);
+            if (!post) return;
+
+            // 조회수 증가
+            await updateDoc(doc(db, 'posts', postId), {
+                viewCount: post.viewCount + 1
+            });
+
+            document.getElementById('detailTitle').textContent = post.title;
+            document.getElementById('detailAuthor').textContent = post.authorName;
+            document.getElementById('detailContent').textContent = post.content;
+            document.getElementById('detailDate').textContent = new Date(post.createdAt.seconds * 1000).toLocaleString('ko-KR');
+
+            mainScreen.classList.add('hidden');
+            postDetailScreen.classList.remove('hidden');
+        };
+
+        // 뒤로 가기
+        window.goBack = () => {
+            postDetailScreen.classList.add('hidden');
+            mainScreen.classList.remove('hidden');
+            loadPosts();
+        };
+
+        // 모달 제어
+        window.showNewPostModal = () => {
+            document.getElementById('newPostModal').classList.remove('hidden');
+        };
+
+        window.closeNewPostModal = () => {
+            document.getElementById('newPostModal').classList.add('hidden');
+        };
+
+        // 번역 기능 (데모)
+        window.translateContent = async (type) => {
+            const element = document.getElementById(type === 'post' ? 'detailContent' : 'detailContent');
+            const currentText = element.textContent;
+            
+            // 실제로는 Google Translation API 호출
+            if (element.dataset.translated === 'true') {
+                element.textContent = element.dataset.original;
+                element.dataset.translated = 'false';
+            } else {
+                element.dataset.original = currentText;
+                element.textContent = '[번역됨] ' + currentText;
+                element.dataset.translated = 'true';
+            }
+        };
+
+        // 인증 상태 변경 감지
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                currentUser = user;
+                loginScreen.classList.add('hidden');
+                registerScreen.classList.add('hidden');
+                mainScreen.classList.remove('hidden');
+                document.getElementById('userEmail').textContent = user.email;
+                loadPosts();
+            } else {
+                currentUser = null;
+                mainScreen.classList.add('hidden');
+                postDetailScreen.classList.add('hidden');
+                loginScreen.classList.remove('hidden');
+            }
+        });
+    </script>
+</head>
+<body class="bg-gray-50">
+    <!-- 로그인 화면 -->
+    <div id="loginScreen" class="min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-lg p-8 w-full max-w-md">
+            <div class="text-center mb-8">
+                <h1 class="text-3xl font-bold text-blue-900 mb-2">우송대 경영학과</h1>
+                <p class="text-gray-600">학생 커뮤니티</p>
+            </div>
+            
+            <div class="space-y-4">
+                <input id="loginEmail" type="email" placeholder="이메일" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input id="loginPassword" type="password" placeholder="비밀번호" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <p id="loginError" class="text-red-500 text-sm"></p>
+                <button onclick="loginUser()" 
+                    class="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition">
+                    로그인
+                </button>
+                <button onclick="showRegisterScreen()" 
+                    class="w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200 transition">
+                    회원가입
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 회원가입 화면 -->
+    <div id="registerScreen" class="hidden min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg shadow-lg p-8 w-full max-w-md">
+            <h2 class="text-2xl font-bold text-blue-900 mb-6">회원가입</h2>
+            
+            <div class="space-y-4">
+                <input id="regName" type="text" placeholder="이름" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input id="regStudentId" type="text" placeholder="학번" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input id="regEmail" type="email" placeholder="이메일" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input id="regPassword" type="password" placeholder="비밀번호 (최소 6자)" 
+                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <label class="flex items-center gap-2">
+                    <input id="regIsInternational" type="checkbox" class="w-4 h-4">
+                    <span class="text-sm text-gray-700">유학생입니다</span>
+                </label>
+                <p id="registerError" class="text-red-500 text-sm"></p>
+                <button onclick="registerUser()" 
+                    class="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition">
+                    가입하기
+                </button>
+                <button onclick="showLoginScreen()" 
+                    class="w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200 transition">
+                    로그인으로 돌아가기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 메인 화면 -->
+    <div id="mainScreen" class="hidden min-h-screen">
+        <!-- 헤더 -->
+        <header class="bg-blue-900 text-white py-4 px-6 sticky top-0 z-10 shadow-md">
+            <div class="flex items-center justify-between">
+                <h1 class="text-xl font-bold">우송대 커뮤니티</h1>
+                <div class="flex items-center gap-4">
+                    <span id="userEmail" class="text-sm"></span>
+                    <button onclick="logoutUser()" class="text-sm bg-blue-800 px-3 py-1 rounded hover:bg-blue-700">
+                        로그아웃
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- 게시판 탭 -->
+        <div class="bg-white border-b sticky top-16 z-10">
+            <div class="flex overflow-x-auto">
+                <button onclick="switchBoard('qa')" 
+                    class="board-tab px-6 py-3 font-medium transition bg-blue-900 text-white">
+                    문제 질문
+                </button>
+                <button onclick="switchBoard('community')" 
+                    class="board-tab px-6 py-3 font-medium transition text-gray-600">
+                    소통
+                </button>
+                <button onclick="switchBoard('info')" 
+                    class="board-tab px-6 py-3 font-medium transition text-gray-600">
+                    정보 공유
+                </button>
+            </div>
+        </div>
+
+        <!-- 게시글 목록 -->
+        <main id="postsContainer" class="p-4 space-y-3 pb-24">
+            <!-- 게시글이 동적으로 로드됨 -->
+        </main>
+
+        <!-- 글쓰기 버튼 -->
+        <button onclick="showNewPostModal()" 
+            class="fixed bottom-6 right-6 w-14 h-14 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-700 transition flex items-center justify-center text-2xl">
+            +
+        </button>
+    </div>
+
+    <!-- 게시글 상세 화면 -->
+    <div id="postDetailScreen" class="hidden min-h-screen bg-gray-50">
+        <header class="bg-blue-900 text-white py-4 px-6 sticky top-0 z-10 shadow-md flex items-center gap-4">
+            <button onclick="goBack()" class="text-2xl">←</button>
+            <h1 class="text-lg font-bold">게시글 상세</h1>
+        </header>
+
+        <main class="p-6 bg-white">
+            <div class="flex items-start justify-between mb-4">
+                <h1 id="detailTitle" class="text-xl font-bold text-gray-900 flex-1"></h1>
+                <button onclick="translateContent('post')" 
+                    class="ml-2 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200 transition">
+                    🌐 번역
+                </button>
+            </div>
+
+            <div class="flex items-center gap-2 mb-4 text-sm text-gray-600">
+                <div class="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-semibold">
+                    U
+                </div>
+                <div>
+                    <p id="detailAuthor" class="font-medium text-gray-900"></p>
+                    <p id="detailDate" class="text-xs"></p>
+                </div>
+            </div>
+
+            <div class="prose prose-sm max-w-none mb-6">
+                <p id="detailContent" class="text-gray-800 leading-relaxed"></p>
+            </div>
+
+            <hr class="my-6">
+
+            <div>
+                <h2 class="text-lg font-bold mb-4">댓글</h2>
+                <div class="bg-gray-50 rounded-lg p-4 text-center text-gray-500">
+                    댓글 기능은 곧 추가될 예정입니다.
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 새 게시글 모달 -->
+    <div id="newPostModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg w-full max-w-2xl p-6">
+            <h2 class="text-xl font-bold mb-4">새 게시글 작성</h2>
+            <input id="postTitle" type="text" placeholder="제목" 
+                class="w-full px-4 py-3 border border-gray-300 rounded-lg mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <textarea id="postContent" placeholder="내용을 입력하세요..." 
+                class="w-full px-4 py-3 border border-gray-300 rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" 
+                rows="6"></textarea>
+            <div class="flex gap-2">
+                <button onclick="createPost()" 
+                    class="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition">
+                    작성하기
+                </button>
+                <button onclick="closeNewPostModal()" 
+                    class="flex-1 bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition">
+                    취소
+                </button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
